@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <gmp.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 /*********************** VARIAVEIS GLOBAIS *********************************/
 int q;
@@ -16,11 +18,15 @@ mpf_t cosseno;
 /*********************** PROTOTIPOS DAS FUNCOES *********************************/
 void parserEntrada(int, char**);
 void potencia(mpf_t, mpf_t, int);
-void fatorial(mpz_t, unsigned long int);
+void fatorial(mpf_t, unsigned long int);
 void calculaSequencial(void);
+void* threadParcela(void*);
+void calculaCoeficiente(mpf_t, long int);
+
 /********************************************************************************/
 
 int main(int argc, char** argv){
+	int i;
 	mpf_init(precisao);
 	mpf_init(x);
 	mpf_init(cosseno);
@@ -32,14 +38,60 @@ int main(int argc, char** argv){
     	calculaSequencial();
 	}
 
+	else{
+		pthread_barrier_t bar;
+		pthread_t parcela[q];
+		sem_t mutex;
+
+		if(sem_init(&mutex, 0, 1)){
+			fprintf(stderr, "ERROR creating semaphore\n");
+			exit(0);
+		}
+		
+		if(pthread_barrier_init(&bar ,NULL, q)){
+			fprintf(stderr, "ERROR initializing barrier\n");
+			exit(0);
+		}
+
+		for(i = 0; i < q; i++){
+		 	if(pthread_create(&parcela[i], NULL, &threadParcela, (void*) i)){
+				fprintf(stderr, "ERROR creating threads\n");
+				exit(0);
+		 	}
+		}
+
+		for(i = 0; i < q; i++){
+			if(pthread_join(parcela[i], NULL)){
+				fprintf(stderr, "ERROR joining threads\n");
+				exit(0);	
+			}
+		}
+
+		pthread_exit(NULL);
+	}
+
 	mpf_clear(x);
 	mpf_clear(cosseno);
 	mpf_clear(precisao);
 	return 0;
 }
 
+void* threadParcela(void* id){
 
-/*********************** FUNCOES QUE FALTAM IMPLEMENTAR *********************************/
+	return NULL;
+}
+
+void calculaCoeficiente(mpf_t cf, long int i){
+	mpf_t fact;
+	mpf_init(fact);
+
+	fatorial(fact, 2 * i);
+	mpf_ui_div(cf, 1, fact);
+
+	if(i % 2 == 1){
+		mpf_neg(cf, cf);
+	}
+}
 
 void calculaSequencial(void){
 	unsigned long int i;
@@ -47,34 +99,22 @@ void calculaSequencial(void){
 	mpf_t pot_x;
 	mpf_t termAnt;
 	mpf_t termDif;	
-	mpz_t fact;
 
 	mpf_init_set_ui(term, 1);
 	mpf_init_set_ui(pot_x, 1);
-	mpf_init_set_ui(termAnt, 2);
 	mpf_init_set_ui(termDif, 1);
-	mpz_init_set_ui(fact, 1);	
-	
+	mpf_init_set_ui(termAnt, 2);
+
 	for(i = 0; ; i++){
-		potencia(pot_x, x, 2*i);    						// pot_x = potencia(x, 2*i)
+		potencia(pot_x, x, 2 * i);    						// pot_x = potencia(x, 2*i)
+		calculaCoeficiente(term, i); 						// calcula coeficiente da parcela i
+		mpf_mul(term, term, pot_x);							// termo final
 
-		if(i % 2 == 1){										// pot_x = potencia(-1, i) * potencia(x, 2*i) 
-			mpf_neg(pot_x, pot_x);
-		}
-											
-		// gmp_printf ("%lu) Mull:  %2.20Ff\n", i, aux);
-
-		fatorial(fact, 2*i);	          					// fact = fatorial(2*i)
-		mpf_set_z(term, fact);								// term = (mpf_t)fatorial(2*i) 
-		mpf_div(term, pot_x, term);							// term = potencia(-1, i)*potencia(x, 2*i)/fatorial(2*i)
-		// gmp_printf ("%lu) Div aux :  %2.20Ff\n", i, aux);
-		// gmp_printf ("%lu) Div aux1:  %2.20Ff\n", i, aux1);
-		
 		mpf_add(cosseno, cosseno, term);
 
 		if(criterio == 'f'){
 			mpf_sub(termDif, term, termAnt);
-			//mpf_set(termAnt, term);
+			mpf_set(termAnt, term);
 		}
 
 		else if(criterio == 'm'){
@@ -90,8 +130,6 @@ void calculaSequencial(void){
 			break;	
 		}	
 		
-		mpf_set(termAnt, term);	
-		
 		gmp_printf ("\nCosseno:\n%.50Ff\n", cosseno);
 	}
 
@@ -104,16 +142,19 @@ void calculaSequencial(void){
 	
 	mpf_clear(term);
 	mpf_clear(pot_x);
-	mpz_clear(fact);
 	mpf_clear(termAnt);
 	mpf_clear(termDif);
 }
 
-/*********************** FUNCOES PRONTAS *********************************/
+
 void parserEntrada(int argc, char** argv){
 	if(argc < 5 || argc > 6){
-		printf("Erro na quantidade dos parametros.\n");
-		printf("Formato: ./ep2  <q (int)>  <f|m>  <exp (int)>  <x>  [d|s]\n");
+		printf("Formato esperado: ./ep2 <arg1> <arg2> <arg3> <arg4> [arg5]\n");
+		printf("arg1 := #Threads: unsigned_int|0\n");
+		printf("arg2 := criterio_de_parada: (f|m)\n");
+		printf("arg3 := precisao: unsigned_int\n");
+		printf("arg4 := valor_de_x: float\n");
+		printf("arg5(opc) := opcao_debugger/sequencial: (d|s)\n\n");
 		exit(-1);
 	}
 
@@ -129,7 +170,9 @@ void parserEntrada(int argc, char** argv){
 		potencia(precisao, precisao, atoi(argv[3]));
 		//precisao = atoi(argv[3]);
 		mpf_init_set_str(x, argv[4], 10);
-		
+
+		opc = 0;
+
 		if(argc == 6){
 			opc = argv[5][0];
 		}
@@ -141,13 +184,13 @@ void parserEntrada(int argc, char** argv){
 
 /*############################# FUNÇÕES MATEMATICAS #############################*/
 
-void fatorial(mpz_t fact, unsigned long int n){
+void fatorial(mpf_t fact, unsigned long int n){
 	if(n == 0){
-		mpz_set_si(fact, 1);
+		mpf_set_ui(fact, 1);
 	}
 	else{
 		fatorial(fact, n-1);
-		mpz_mul_ui(fact, fact, n);
+		mpf_mul_ui(fact, fact, n);
 	}
 }
 
@@ -165,24 +208,5 @@ void potencia(mpf_t result, mpf_t base, int expo){
 	mpf_clear(tmp);
 }
 
-/*
-double potencia(double base, int exp){
-	int i;
-	double pot = 1;
 
-	for(i = 0; i < exp; i++){
-		pot *= base;
-	}
-
-	return pot;
-}
-
-void fatorial (mpz_t result, unsigned long n){
-  unsigned long i;
-  mpz_init_set_str (result, "1", 0);
-
-  for (i = 1; i <= n; i++)
-    mpz_mul_ui (result, result, i);
-}
-*/
 /*###############################################################################*/
