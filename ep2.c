@@ -4,16 +4,24 @@
 #include <gmp.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <time.h>
 
 /*********************** VARIAVEIS GLOBAIS *********************************/
 int q;
 char criterio;
 char opc;
+time_t inicio;
+
+mpf_t boxTermAnt;
+int stop;
+unsigned long int ind_sum;
 
 mpf_t precisao;
 mpf_t x;
 mpf_t cosseno;
 
+pthread_barrier_t bar;
+sem_t mutex;
 
 /*********************** PROTOTIPOS DAS FUNCOES *********************************/
 void parserEntrada(int, char**);
@@ -21,7 +29,7 @@ void potencia(mpf_t, mpf_t, int);
 void fatorial(mpf_t, unsigned long int);
 void calculaSequencial(void);
 void* threadParcela(void*);
-void calculaCoeficiente(mpf_t, long int);
+void calculaCoeficiente(mpf_t, unsigned long int);
 
 /********************************************************************************/
 
@@ -35,13 +43,13 @@ int main(int argc, char** argv){
 	parserEntrada(argc, argv);
 
 	if(opc == 's'){
+		inicio = time(NULL);
     	calculaSequencial();
 	}
 
 	else{
-		pthread_barrier_t bar;
+		
 		pthread_t parcela[q];
-		sem_t mutex;
 
 		if(sem_init(&mutex, 0, 1)){
 			fprintf(stderr, "ERROR creating semaphore\n");
@@ -53,6 +61,12 @@ int main(int argc, char** argv){
 			exit(0);
 		}
 
+		ind_sum = 0;
+		stop = 0;
+		mpf_init_set_si(boxTermAnt, -2);
+
+		inicio = time(NULL);
+		
 		for(i = 0; i < q; i++){
 		 	if(pthread_create(&parcela[i], NULL, &threadParcela, (void*) i)){
 				fprintf(stderr, "ERROR creating threads\n");
@@ -67,21 +81,68 @@ int main(int argc, char** argv){
 			}
 		}
 
-		pthread_exit(NULL);
+		printf("\n---------------------------------------------------------\n");
+		gmp_printf("Cosseno de %Ff eh igual a: \n%.50Ff\n", x, cosseno);
+		printf("\n# de termos calculados: %ld", ind_sum);
+		printf("\n---------------------------------------------------------\n\n");
 	}
+
+	printf("Tempo estimado: %.2f seg\n", (float)(time(NULL)-inicio));
 
 	mpf_clear(x);
 	mpf_clear(cosseno);
 	mpf_clear(precisao);
+	pthread_exit(NULL);
+
 	return 0;
 }
 
 void* threadParcela(void* id){
+	unsigned long int i;
+	mpf_t parcela;
+	mpf_t pot_x;
+	mpf_t termDif;
+
+	mpf_init(parcela);
+	mpf_init(pot_x);
+	mpf_init(termDif);
+
+	while(!stop){
+		sem_wait(&mutex);
+		i = ind_sum;
+		ind_sum++;
+		sem_post(&mutex);
+
+		potencia(pot_x, x, 2 * i);
+		calculaCoeficiente(parcela, i);
+		mpf_mul(parcela, parcela, pot_x);
+
+		if(criterio == 'f'){
+			sem_wait(&mutex);
+			mpf_sub(termDif, parcela, boxTermAnt);
+			mpf_set(boxTermAnt, parcela);
+			sem_post(&mutex);
+		}
+
+		mpf_abs(termDif, termDif);
+
+		if(mpf_cmp(termDif, precisao) < 0){
+			stop = 1;
+		}
+		
+		sem_wait(&mutex);
+		mpf_add(cosseno, cosseno, parcela);
+		//gmp_printf("\nCosseno de %Ff eh igual a: \n%.30Ff\n", x, cosseno);
+		sem_post(&mutex);
+
+		pthread_barrier_wait(&bar);
+
+	}
 
 	return NULL;
 }
 
-void calculaCoeficiente(mpf_t cf, long int i){
+void calculaCoeficiente(mpf_t cf, unsigned long int i){
 	mpf_t fact;
 	mpf_init(fact);
 
