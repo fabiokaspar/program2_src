@@ -14,7 +14,7 @@ char criterio;
 char opc;
 mpf_t cosseno;
 
-mpf_t boxTermAnt;
+mpf_t somaRodada; // idem
 int stop;
 clock_t inicio;
 unsigned long int ind_sum;
@@ -60,8 +60,7 @@ int main(int argc, char** argv){
 
 		ind_sum = 0;
 		stop = 0;
-		mpf_init_set_si(boxTermAnt, 2);
-
+		mpf_init(somaRodada);
 		inicio = clock();
 		
 		for(i = 0; i < q; i++){
@@ -96,15 +95,15 @@ int main(int argc, char** argv){
 
 void* threadParcela(void* idThread){
 	unsigned long int i;
-	mpf_t parcela;
+	mpf_t termo;
 	mpf_t pot_x;
 	mpf_t erro;
 	int id = (int) idThread;
 
-	mpf_init(parcela);
+	mpf_init(termo);
 	mpf_init(pot_x);
-	mpf_init(erro);
-
+	mpf_init_set(erro, precisao);
+	
 	while(!stop){
 		sem_wait(&mutex);
 		i = ind_sum;
@@ -112,31 +111,38 @@ void* threadParcela(void* idThread){
 		sem_post(&mutex);
 
 		potencia(pot_x, x, 2 * i);
-		calculaCoeficiente(parcela, i);
-		mpf_mul(parcela, parcela, pot_x);
+		calculaCoeficiente(termo, i);
+		mpf_mul(termo, termo, pot_x);
 
-		if(criterio == 'f'){
-			sem_wait(&mutex);
-			mpf_sub(erro, parcela, boxTermAnt);
-			mpf_set(boxTermAnt, parcela);
-			sem_post(&mutex);
+		// neste ponto, a thread jah calculou o seu termo
+		if(criterio == 'm'){
+			mpf_set(erro, termo);
+			mpf_abs(erro, erro);
 		}
 
-		else if(criterio == 'm') {
-			sem_wait(&mutex);
-			mpf_set(erro, parcela);
-			sem_post(&mutex);
-		}
-
-		mpf_abs(erro, erro);
-
-		if(mpf_cmp(erro, precisao) < 0){
-			stop = 1;
-		}
+		// soma dos q termos => criterio f
 		
 		sem_wait(&mutex);
-		mpf_add(cosseno, cosseno, parcela);
+		mpf_add(somaRodada, somaRodada, termo);
 		sem_post(&mutex);
+		
+		pthread_barrier_wait(&bar);
+
+		if(id == 0 && criterio == 'f'){
+			mpf_set(erro, somaRodada);
+			mpf_abs(erro, erro);
+		}
+
+		if(criterio == 'm' || (id == 0 && criterio == 'f')){
+			if(mpf_cmp(erro, precisao) < 0){
+				stop = 1;
+			}
+		}
+
+		if(id == 0){
+			mpf_add(cosseno, cosseno, somaRodada);
+			mpf_set_ui(somaRodada, 0);
+		}
 
 		pthread_barrier_wait(&bar);
 	}
