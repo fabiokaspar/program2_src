@@ -16,8 +16,8 @@ mpf_t cosseno;
 
 mpf_t somaRodada; // idem
 int stop;
-clock_t inicio;
 unsigned long int ind_sum;
+int contador_rodadas;
 
 pthread_barrier_t bar;
 sem_t mutex;
@@ -27,7 +27,8 @@ void parserEntrada(int, char**);
 void potencia(mpf_t, mpf_t, int);
 void fatorial(mpf_t, unsigned long int);
 void calculaSequencial(void);
-void* threadParcela(void*);
+void* threadF(void*);
+void* threadM(void*);
 void calculaCoeficiente(mpf_t, unsigned long int);
 
 /********************************************************************************/
@@ -36,16 +37,14 @@ int main(int argc, char** argv){
 	int i;
 	mpf_set_default_prec(1000000);
 	mpf_init(cosseno);
-	
+
 	parserEntrada(argc, argv);
 
 	if(opc == 's'){
-		inicio = clock();
     	calculaSequencial();
 	}
 
 	else{
-		
 		pthread_t parcela[q];
 
 		if(sem_init(&mutex, 0, 1)){
@@ -61,15 +60,25 @@ int main(int argc, char** argv){
 		ind_sum = 0;
 		stop = 0;
 		mpf_init(somaRodada);
-		inicio = clock();
 		
-		for(i = 0; i < q; i++){
-		 	if(pthread_create(&parcela[i], NULL, &threadParcela, (void*) i)){
-				fprintf(stderr, "erroR creating threads\n");
-				exit(0);
+		if(criterio == 'f'){
+			for(i = 0; i < q; i++){
+			 	if(pthread_create(&parcela[i], NULL, &threadF, (void*) i)){
+					fprintf(stderr, "erroR creating threadsF\n");
+					exit(0);
+			 	}
 		 	}
 		}
 
+		else{
+			for(i = 0; i < q; i++){
+			 	if(pthread_create(&parcela[i], NULL, &threadM, (void*) i)){
+					fprintf(stderr, "erroR creating threadsM\n");
+					exit(0);
+			 	}
+		 	}	
+		}
+		
 		for(i = 0; i < q; i++){
 			if(pthread_join(parcela[i], NULL)){
 				fprintf(stderr, "erroR joining threads\n");
@@ -79,11 +88,9 @@ int main(int argc, char** argv){
 
 		printf("\n---------------------------------------------------------\n");
 		gmp_printf("Cosseno de %Ff eh igual a: \n%.1000Ff\n", x, cosseno);
-		printf("\n# de termos calculados: %ld", ind_sum);
-		printf("\n---------------------------------------------------------\n\n");
+		printf("\n# de Rodadas: %ld", ind_sum/q);
+		printf("\n---------------------------------------------------------");
 	}
-
-	printf("Tempo estimado: %.3f seg\n", (float)(clock()-inicio)/CLOCKS_PER_SEC);
 
 	mpf_clear(x);
 	mpf_clear(cosseno);
@@ -93,7 +100,7 @@ int main(int argc, char** argv){
 	return 0;
 }
 
-void* threadParcela(void* idThread){
+void* threadF(void* idThread){
 	unsigned long int i;
 	mpf_t termo;
 	mpf_t pot_x;
@@ -103,6 +110,63 @@ void* threadParcela(void* idThread){
 	mpf_init(termo);
 	mpf_init(pot_x);
 	mpf_init_set(erro, precisao);
+
+	while(!stop){
+		sem_wait(&mutex);
+		i = ind_sum;
+		ind_sum++;
+		sem_post(&mutex);
+
+		/********** calcula termo  ************/
+		potencia(pot_x, x, 2 * i);
+		calculaCoeficiente(termo, i);
+		mpf_mul(termo, termo, pot_x);
+		/**************************************/
+
+		sem_wait(&mutex);
+		mpf_add(somaRodada, somaRodada, termo);
+		mpf_add(cosseno, cosseno, termo);
+		sem_post(&mutex);
+		
+		if(opc == 'd'){
+			sem_wait(&mutex);
+			printf("\nNº Rodada: %ld;		Thread_ID: %d", i/q, id);
+			sem_post(&mutex);
+		}
+
+		/* barreira 1 */
+		pthread_barrier_wait(&bar);
+		//aqui todos somaram em somaRodada
+		
+		if(id == 0){
+			mpf_abs(somaRodada, somaRodada);
+
+			if(mpf_cmp(somaRodada, precisao) < 0){
+				stop = 1;
+			}
+
+			mpf_set_ui(somaRodada, 0);
+
+			if(opc == 'd'){
+				gmp_printf("\nCosseno de %Ff:\n %.60Ff\n", x, cosseno);
+			}
+		}
+
+		/* barreira 2 */
+		pthread_barrier_wait(&bar);
+	}
+
+	return NULL;
+}
+
+void* threadM(void* idThread){
+	unsigned long int i;
+	mpf_t termo;
+	mpf_t pot_x;
+	int id = (int) idThread;
+
+	mpf_init(termo);
+	mpf_init(pot_x);
 	
 	while(!stop){
 		sem_wait(&mutex);
@@ -110,41 +174,36 @@ void* threadParcela(void* idThread){
 		ind_sum++;
 		sem_post(&mutex);
 
+		/********** calcula termo  ************/
 		potencia(pot_x, x, 2 * i);
 		calculaCoeficiente(termo, i);
 		mpf_mul(termo, termo, pot_x);
-
-		// neste ponto, a thread jah calculou o seu termo
-		if(criterio == 'm'){
-			mpf_set(erro, termo);
-			mpf_abs(erro, erro);
-		}
-
-		// soma dos q termos => criterio f
+		/**************************************/
 		
 		sem_wait(&mutex);
-		mpf_add(somaRodada, somaRodada, termo);
+		mpf_add(cosseno, cosseno, termo);
 		sem_post(&mutex);
+
+		mpf_abs(termo, termo);
 		
-		pthread_barrier_wait(&bar);
-
-		if(id == 0 && criterio == 'f'){
-			mpf_set(erro, somaRodada);
-			mpf_abs(erro, erro);
+		if(mpf_cmp(termo, precisao) < 0){
+			stop = 1; // thread diz: "hora de terminar, termo pequeno"
+		}
+		
+		if(opc == 'd'){
+			sem_wait(&mutex);
+			printf("\nNº Rodada: %ld;		Thread_ID: %d", i/q, id);
+			sem_post(&mutex);
 		}
 
-		if(criterio == 'm' || (id == 0 && criterio == 'f')){
-			if(mpf_cmp(erro, precisao) < 0){
-				stop = 1;
-			}
-		}
+		// TODAS threads chegam na barreira com o termo já calculado
+		pthread_barrier_wait(&bar); 
 
-		if(id == 0){
-			mpf_add(cosseno, cosseno, somaRodada);
-			mpf_set_ui(somaRodada, 0);
+		if(opc == 'd' && id == 0){
+			sem_wait(&mutex);
+			gmp_printf("\nCosseno de %Ff:\n %.60Ff\n", x, cosseno);
+			sem_post(&mutex);
 		}
-
-		pthread_barrier_wait(&bar);
 	}
 
 	return NULL;
@@ -196,13 +255,13 @@ void calculaSequencial(void){
 			break;	
 		}	
 		
-		gmp_printf ("\nCosseno:\n%.50Ff\n", cosseno);
+		gmp_printf ("\nRodada: %ld Cosseno:\n%.50Ff\n", i, cosseno);
 	}
 
 	printf("\n---------------------------------------------------------\n");
 	gmp_printf("Cosseno de %Ff eh igual a: \n%.100000Ff\n", x, cosseno);
 	printf("\n# de termos calculados: %ld", i+1);
-	printf("\n---------------------------------------------------------\n\n");
+	printf("\n---------------------------------------------------------");
 
 	mpf_set_si(cosseno, 0);
 	
@@ -225,14 +284,31 @@ void parserEntrada(int argc, char** argv){
 
 	else{
 		q = atoi(argv[1]);
+		int expoente;
+
 		if(q == 0){
 			q = sysconf(_SC_NPROCESSORS_ONLN);		// descobre a qtde de nucleos do computador
 		}
 
 		criterio = argv[2][0];
+		
+		if(criterio != 'f' && criterio != 'm'){
+			printf("criterio f ou m!\n");
+			exit(0);
+		}
 
-		mpf_init_set_d(precisao, 0.1);
-		potencia(precisao, precisao, atoi(argv[3]));
+		expoente = atoi(argv[3]);
+
+		if(expoente >= 0){
+			mpf_init_set_d(precisao, 0.1);
+		}
+
+		else{
+			expoente = -expoente; // expoente tem que ser positivo
+			mpf_init_set_d(precisao, 10);	
+		}
+
+		potencia(precisao, precisao, expoente);
 		
 		mpf_init_set_str(x, argv[4], 10);
 
