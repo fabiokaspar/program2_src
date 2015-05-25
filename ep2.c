@@ -14,7 +14,7 @@ char criterio;
 char opc;
 mpf_t cosseno;
 
-mpf_t somaRodada; // idem
+mpf_t somaRodada;
 int stop;
 unsigned long int ind_sum;
 int contador_rodadas;
@@ -87,7 +87,7 @@ int main(int argc, char** argv){
 		}
 
 		printf("\n---------------------------------------------------------\n");
-		gmp_printf("Cosseno de %Ff eh igual a: \n%.1000Ff\n", x, cosseno);
+		gmp_printf("Cosseno de %Ff eh igual a: \n%.100000Ff\n", x, cosseno);
 		printf("\n# de Rodadas: %ld", ind_sum/q);
 		printf("\n---------------------------------------------------------");
 	}
@@ -99,6 +99,8 @@ int main(int argc, char** argv){
 
 	return 0;
 }
+
+/*###############################################################################*/
 
 void* threadF(void* idThread){
 	unsigned long int i;
@@ -129,14 +131,12 @@ void* threadF(void* idThread){
 		sem_post(&mutex);
 		
 		if(opc == 'd'){
-			sem_wait(&mutex);
 			printf("\nNº Rodada: %ld;		Thread_ID: %d", i/q, id);
-			sem_post(&mutex);
 		}
 
 		/* barreira 1 */
-		pthread_barrier_wait(&bar);
 		//aqui todos somaram em somaRodada
+		pthread_barrier_wait(&bar);
 		
 		if(id == 0){
 			mpf_abs(somaRodada, somaRodada);
@@ -144,7 +144,7 @@ void* threadF(void* idThread){
 			if(mpf_cmp(somaRodada, precisao) < 0){
 				stop = 1;
 			}
-
+					
 			mpf_set_ui(somaRodada, 0);
 
 			if(opc == 'd'){
@@ -189,20 +189,22 @@ void* threadM(void* idThread){
 		if(mpf_cmp(termo, precisao) < 0){
 			stop = 1; // thread diz: "hora de terminar, termo pequeno"
 		}
-		
-		if(opc == 'd'){
-			sem_wait(&mutex);
-			printf("\nNº Rodada: %ld;		Thread_ID: %d", i/q, id);
-			sem_post(&mutex);
-		}
 
+		if(opc == 'd'){			
+			printf("\nNº Rodada: %ld;		Thread_ID: %d", i/q, id);
+		}
+		
 		// TODAS threads chegam na barreira com o termo já calculado
 		pthread_barrier_wait(&bar); 
 
-		if(opc == 'd' && id == 0){
-			sem_wait(&mutex);
-			gmp_printf("\nCosseno de %Ff:\n %.60Ff\n", x, cosseno);
-			sem_post(&mutex);
+		if(opc == 'd'){				
+			if(id == 0){
+				sem_wait(&mutex);
+				gmp_printf("\nCosseno de %Ff:\n %.60Ff\n", x, cosseno);
+				sem_post(&mutex);
+			}
+
+			pthread_barrier_wait(&bar); 
 		}
 	}
 
@@ -225,13 +227,9 @@ void calculaSequencial(void){
 	unsigned long int i;
 	mpf_t term;
 	mpf_t pot_x;
-	mpf_t termAnt;
-	mpf_t erro;	
 
 	mpf_init_set_ui(term, 1);
 	mpf_init_set_ui(pot_x, 1);
-	mpf_init_set_ui(erro, 1);
-	mpf_init_set_ui(termAnt, 2);
 
 	for(i = 0; ; i++){
 		potencia(pot_x, x, 2 * i);    						// pot_x = potencia(x, 2*i)
@@ -239,19 +237,14 @@ void calculaSequencial(void){
 		mpf_mul(term, term, pot_x);							// termo final
 
 		mpf_add(cosseno, cosseno, term);
+															
+		if(criterio == 'f' && i == 0){											
+			mpf_set(term, precisao);	     				
+		}													 
+		
+		mpf_abs(term, term);
 
-		if(criterio == 'f'){
-			mpf_sub(erro, term, termAnt);
-			mpf_set(termAnt, term);
-		}
-
-		else if(criterio == 'm'){
-			mpf_set(erro, term);	
-		}
-
-		mpf_abs(erro, erro);
-
-		if(mpf_cmp(erro, precisao) < 0){
+		if(mpf_cmp(term, precisao) < 0){
 			break;	
 		}	
 		
@@ -267,8 +260,6 @@ void calculaSequencial(void){
 	
 	mpf_clear(term);
 	mpf_clear(pot_x);
-	mpf_clear(termAnt);
-	mpf_clear(erro);
 }
 
 void parserEntrada(int argc, char** argv){
